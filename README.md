@@ -1,2 +1,2 @@
 # Seed
-Small Extenible EDitor
+Seed stands for Small Extentable EDitor.
