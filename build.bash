@@ -14,7 +14,7 @@ mkdir -p bin
 odin build seed \
     -out:bin/seed \
     -o:speed \
-    -define:COMMIT_HASH="\"$COMMIT_HASH\"" \
+    -define:COMMIT_HASH="$COMMIT_HASH" \
     -extra-linker-flags:"-s -w -lGL -lX11 -lpthread -ldl"
 
 echo "--- Build Complete: ./seed ---"
