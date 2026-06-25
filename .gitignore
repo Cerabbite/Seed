@@ -1,3 +1,2 @@
-zig-out/
-zig-pkg/
-.zig-cache/
+seed.bin
+bin/
