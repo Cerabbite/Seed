@@ -6,7 +6,7 @@ set -e
 # 1. Get the Git Hash
 COMMIT_HASH=$(git rev-parse --short HEAD)
 if [[ -n $(git status --porcelain) ]]; then
-    COMMIT_HASH="$COMMIT_HASH-di
+    COMMIT_HASH="$COMMIT_HASH-dirty"
 fi
 
 echo "--- Building Seed (Hash: $COMMIT_HASH) ---"
