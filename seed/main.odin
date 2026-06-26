@@ -64,7 +64,7 @@ main :: proc() {
 
 	glfw.MakeContextCurrent(window)
 
-	glfw.SwapInterval(1)
+	glfw.SwapInterval(0)
 
 	glfw.SetKeyCallback(window, key_callback)
 	glfw.SetCharCallback(window, character_callback)
