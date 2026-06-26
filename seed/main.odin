@@ -19,6 +19,9 @@ GL_MINOR_VERSION :: 6
 
 COMMIT_HASH :: #config(COMMIT_HASH, "dev")
 
+LINE_HEIGHT :: 18.0
+FONT_SIZE :: 14.0
+LINE_PADDING :: 4.0
 
 running: b32 = true
 
@@ -28,16 +31,18 @@ Vertex :: struct {
 	TextureCoordinate: linalg.Vector2f32,
 }
 
-text_buffer: [dynamic]rune
+lines: [dynamic][dynamic]rune
+current_line: int = 0
 mesh_dirty: bool = true
 vao: u32
 vbo: u32
 shader_program: u32
+vertices: [dynamic]Vertex
 vertex_count: i32
 font_atlas_texture_id: u32
 packed_chars: []truetype.packedchar
 aligned_quads: []truetype.aligned_quad
-screen_width: f32 = 512
+screen_width: f32 = 1024
 screen_height: f32 = 512
 
 main :: proc() {
@@ -76,8 +81,6 @@ main :: proc() {
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-	init()
-
 	font_data, error := os.read_entire_file(
 		"/usr/share/fonts/truetype/ubuntu/UbuntuMono[wght].ttf",
 		context.allocator,
@@ -96,7 +99,6 @@ main :: proc() {
 
 	code_point_of_first_char: i32 = 32
 	chars_to_include_in_font_atlas: i32 = 95
-	font_size: f32 = 14.0
 
 	packed_chars = make([]truetype.packedchar, chars_to_include_in_font_atlas)
 	aligned_quads = make([]truetype.aligned_quad, chars_to_include_in_font_atlas)
@@ -118,7 +120,7 @@ main :: proc() {
 		&font_context,
 		&font_data[0],
 		0,
-		font_size,
+		FONT_SIZE,
 		code_point_of_first_char,
 		chars_to_include_in_font_atlas,
 		&packed_chars[0],
@@ -142,7 +144,6 @@ main :: proc() {
 		)
 	}
 
-	font_atlas_texture_id: u32
 	gl.GenTextures(1, &font_atlas_texture_id)
 	gl.BindTexture(gl.TEXTURE_2D, font_atlas_texture_id)
 
@@ -166,14 +167,17 @@ main :: proc() {
 
 	gl.BindTexture(gl.TEXTURE_2D, 0)
 
-	shader_program, shader_ok := init_shaders()
+	shader_ok: bool
+	shader_program, shader_ok = init_shaders()
 	if !shader_ok {
 		fmt.eprintln("Failed to create shader program")
 		return
 	}
 
-	vertices: [dynamic]Vertex = build_text_mesh(
-		"Hello World",
+	append(&lines, [dynamic]rune{})
+
+	vertices = build_text_mesh(
+		lines,
 		aligned_quads,
 		packed_chars,
 		f32(screen_width),
@@ -185,7 +189,12 @@ main :: proc() {
 
 	gl.BindVertexArray(vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices) * size_of(Vertex), &vertices[0], gl.STATIC_DRAW)
+	gl.BufferData(
+		gl.ARRAY_BUFFER,
+		len(vertices) * size_of(Vertex),
+		raw_data(vertices),
+		gl.STATIC_DRAW,
+	)
 
 	// Tell GL the layout of your Vertex struct
 	// Position  — offset 0,  3 floats
@@ -200,71 +209,67 @@ main :: proc() {
 
 	gl.BindVertexArray(0)
 
-
-	for (!glfw.WindowShouldClose(window) && running) {
+	for !glfw.WindowShouldClose(window) && running {
 		glfw.PollEvents()
-
-		if mesh_dirty {
-			text_str := utf8.runes_to_string(text_buffer[:], context.allocator)
-			defer delete(text_str)
-
-			delete(vertices)
-			vertices = build_text_mesh(
-				text_str,
-				aligned_quads,
-				packed_chars,
-				screen_width,
-				screen_height,
-			)
-			vertex_count = i32(len(vertices))
-
-			gl.BindVertexArray(vao)
-			gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
-			gl.BufferData(
-				gl.ARRAY_BUFFER,
-				len(vertices) * size_of(Vertex),
-				raw_data(vertices),
-				gl.DYNAMIC_DRAW,
-			)
-			gl.BindVertexArray(0)
-
-			mesh_dirty = false
-		}
-
-		draw(shader_program, vao, i32(len(vertices)), font_atlas_texture_id)
-		glfw.SwapBuffers(window)
+		render_frame(window)
 	}
 	exit()
 }
 
-init :: proc() {
-}
-
 init_shaders :: proc() -> (program: u32, ok: bool) {
-
 	vertex_shader := gl.CreateShader(gl.VERTEX_SHADER)
 	vertex_shader_cstr := #load("blit.vert", cstring)
 	gl.ShaderSource(vertex_shader, 1, &vertex_shader_cstr, nil)
 	gl.CompileShader(vertex_shader)
+
+	// Check vertex shader
+	vert_status: i32
+	gl.GetShaderiv(vertex_shader, gl.COMPILE_STATUS, &vert_status)
+	if vert_status == 0 {
+		log: [512]u8
+		gl.GetShaderInfoLog(vertex_shader, 512, nil, &log[0])
+		fmt.printf("VERTEX SHADER ERROR: %s\n", string(log[:]))
+	}
 
 	fragment_shader := gl.CreateShader(gl.FRAGMENT_SHADER)
 	fragment_shader_cstr := #load("blit.frag", cstring)
 	gl.ShaderSource(fragment_shader, 1, &fragment_shader_cstr, nil)
 	gl.CompileShader(fragment_shader)
 
+	// Check fragment shader
+	frag_status: i32
+	gl.GetShaderiv(fragment_shader, gl.COMPILE_STATUS, &frag_status)
+	if frag_status == 0 {
+		log: [512]u8
+		gl.GetShaderInfoLog(fragment_shader, 512, nil, &log[0])
+		fmt.printf("FRAGMENT SHADER ERROR: %s\n", string(log[:]))
+	}
+
 	program = gl.CreateProgram()
 	gl.AttachShader(program, vertex_shader)
 	gl.AttachShader(program, fragment_shader)
 	gl.LinkProgram(program)
+
+	// Check link
+	link_status: i32
+	gl.GetProgramiv(program, gl.LINK_STATUS, &link_status)
+	if link_status == 0 {
+		log: [512]u8
+		gl.GetProgramInfoLog(program, 512, nil, &log[0])
+		fmt.printf("SHADER LINK ERROR: %s\n", string(log[:]))
+	}
+
 	gl.DeleteShader(vertex_shader)
 	gl.DeleteShader(fragment_shader)
-
 	return program, true
+}
 
+line_to_y :: proc(line_index: int, scroll_offset: f32) -> f32 {
+	return f32(line_index) * LINE_HEIGHT - scroll_offset
 }
 
 build_text_mesh :: proc(
-	text: string,
+	lines: [dynamic][dynamic]rune,
 	aligned_quads: []truetype.aligned_quad,
 	packed_chars: []truetype.packedchar,
 	screen_w: f32,
@@ -272,55 +277,76 @@ build_text_mesh :: proc(
 ) -> [dynamic]Vertex {
 	vertices: [dynamic]Vertex
 
-	// Cursor position in pixels, starting top-left-ish
-	x: f32 = 50
-	y: f32 = screen_h / 2
+	for line, line_idx in lines {
+		x: f32 = 10
+		y: f32 = line_to_y(line_idx, 0) + FONT_SIZE + LINE_PADDING
+		for char in line {
+			idx := int(char) - 32
+			if idx < 0 || idx >= len(aligned_quads) {
+				continue
+			}
 
-	for char in text {
-		idx := int(char) - 32
-		if idx < 0 || idx >= len(aligned_quads) {
-			continue
+			q := aligned_quads[idx]
+
+			x0 := (q.x0 + x) / screen_w * 2 - 1
+			x1 := (q.x1 + x) / screen_w * 2 - 1
+			y0 := 1 - (q.y0 + y) / screen_h * 2
+			y1 := 1 - (q.y1 + y) / screen_h * 2
+
+			x += packed_chars[idx].xadvance
+
+			color := linalg.Vector4f32{1, 1, 1, 1}
+
+			// Two triangles (6 vertices) per glyph
+			append(
+				&vertices,
+				Vertex{Position = {x0, y0, 0}, Color = color, TextureCoordinate = {q.s0, q.t0}},
+			)
+			append(
+				&vertices,
+				Vertex{Position = {x1, y0, 0}, Color = color, TextureCoordinate = {q.s1, q.t0}},
+			)
+			append(
+				&vertices,
+				Vertex{Position = {x1, y1, 0}, Color = color, TextureCoordinate = {q.s1, q.t1}},
+			)
+			append(
+				&vertices,
+				Vertex{Position = {x0, y0, 0}, Color = color, TextureCoordinate = {q.s0, q.t0}},
+			)
+			append(
+				&vertices,
+				Vertex{Position = {x1, y1, 0}, Color = color, TextureCoordinate = {q.s1, q.t1}},
+			)
+			append(
+				&vertices,
+				Vertex{Position = {x0, y1, 0}, Color = color, TextureCoordinate = {q.s0, q.t1}},
+			)
 		}
-
-		q := aligned_quads[idx]
-
-		x0 := (q.x0 + x) / screen_w * 2 - 1
-		x1 := (q.x1 + x) / screen_w * 2 - 1
-		y0 := 1 - (q.y0 + y) / screen_h * 2
-		y1 := 1 - (q.y1 + y) / screen_h * 2
-
-		x += packed_chars[idx].xadvance
-
-		color := linalg.Vector4f32{1, 1, 1, 1}
-
-		// Two triangles (6 vertices) per glyph
-		append(
-			&vertices,
-			Vertex{Position = {x0, y0, 0}, Color = color, TextureCoordinate = {q.s0, q.t0}},
-		)
-		append(
-			&vertices,
-			Vertex{Position = {x1, y0, 0}, Color = color, TextureCoordinate = {q.s1, q.t0}},
-		)
-		append(
-			&vertices,
-			Vertex{Position = {x1, y1, 0}, Color = color, TextureCoordinate = {q.s1, q.t1}},
-		)
-		append(
-			&vertices,
-			Vertex{Position = {x0, y0, 0}, Color = color, TextureCoordinate = {q.s0, q.t0}},
-		)
-		append(
-			&vertices,
-			Vertex{Position = {x1, y1, 0}, Color = color, TextureCoordinate = {q.s1, q.t1}},
-		)
-		append(
-			&vertices,
-			Vertex{Position = {x0, y1, 0}, Color = color, TextureCoordinate = {q.s0, q.t1}},
-		)
 	}
 
 	return vertices
+}
+
+render_frame :: proc(window: glfw.WindowHandle) {
+	if mesh_dirty {
+		delete(vertices)
+		vertices = build_text_mesh(lines, aligned_quads, packed_chars, screen_width, screen_height)
+		vertex_count = i32(len(vertices))
+
+		gl.BindVertexArray(vao)
+		gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
+		gl.BufferData(
+			gl.ARRAY_BUFFER,
+			len(vertices) * size_of(Vertex),
+			raw_data(vertices),
+			gl.DYNAMIC_DRAW,
+		)
+		gl.BindVertexArray(0)
+		mesh_dirty = false
+	}
+	draw(shader_program, vao, vertex_count, font_atlas_texture_id)
+	glfw.SwapBuffers(window)
 }
 
 draw :: proc(shader_program: u32, vao: u32, vertex_count: i32, texture_id: u32) {
@@ -339,13 +365,29 @@ exit :: proc() {
 
 key_callback :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods: i32) {
 	context = runtime.default_context()
-	if key == glfw.KEY_ESCAPE {
-		running = false
+	if action == glfw.RELEASE {
+		return
 	}
-	if key == glfw.KEY_BACKSPACE && action != glfw.RELEASE {
-		if len(text_buffer) > 0 do pop(&text_buffer)
+
+	switch key {
+	case glfw.KEY_ESCAPE:
+		running = false
+	case glfw.KEY_BACKSPACE:
+		if len(lines[current_line]) > 0 {
+			pop(&lines[current_line])
+		} else if current_line > 0 {
+			delete(lines[current_line])
+			ordered_remove(&lines, current_line)
+			current_line -= 1
+		}
+		mesh_dirty = true
+	case glfw.KEY_ENTER:
+		current_line += 1
+		inject_at(&lines, current_line, [dynamic]rune{})
 		mesh_dirty = true
 	}
+
+	render_frame(window)
 }
 
 scroll_callback :: proc "c" (window: glfw.WindowHandle, offset_x: f64, offset_y: f64) {
@@ -354,8 +396,9 @@ scroll_callback :: proc "c" (window: glfw.WindowHandle, offset_x: f64, offset_y:
 
 character_callback :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
 	context = runtime.default_context()
-	append(&text_buffer, codepoint)
+	append(&lines[current_line], codepoint)
 	mesh_dirty = true
+	render_frame(window)
 }
 
 size_callback :: proc "c" (window: glfw.WindowHandle, width: i32, height: i32) {
