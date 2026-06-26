@@ -1,6 +1,7 @@
 package main
 
 import "core:c"
+import "core:c/libc"
 import "core:strings"
 import gl "vendor:OpenGL"
 import "vendor:glfw"
@@ -41,6 +42,8 @@ main :: proc() {
 	glfw.SwapInterval(1)
 
 	glfw.SetKeyCallback(window, key_callback)
+
+	glfw.SetCharCallback(window, character_callback)
 
 	glfw.SetFramebufferSizeCallback(window, size_callback)
 
@@ -83,6 +86,10 @@ key_callback :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods
 	if key == glfw.KEY_ESCAPE {
 		running = false
 	}
+}
+
+character_callback :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
+	libc.printf("debug value: %d\n", codepoint)
 }
 
 size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
