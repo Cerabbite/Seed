@@ -1,10 +1,12 @@
 package main
 
+import "base:runtime"
 import "core:c"
 import "core:fmt"
 import "core:math/linalg"
 import "core:os"
 import "core:strings"
+import "core:unicode/utf8"
 import "glfw"
 import gl "vendor:OpenGL"
 import "vendor:stb/truetype"
@@ -17,8 +19,6 @@ GL_MINOR_VERSION :: 6
 
 COMMIT_HASH :: #config(COMMIT_HASH, "dev")
 
-SCREEN_WIDTH :: 512
-SCREEN_HEIGHT :: 512
 
 running: b32 = true
 
@@ -27,6 +27,18 @@ Vertex :: struct {
 	Color:             linalg.Vector4f32,
 	TextureCoordinate: linalg.Vector2f32,
 }
+
+text_buffer: [dynamic]rune
+mesh_dirty: bool = true
+vao: u32
+vbo: u32
+shader_program: u32
+vertex_count: i32
+font_atlas_texture_id: u32
+packed_chars: []truetype.packedchar
+aligned_quads: []truetype.aligned_quad
+screen_width: f32 = 512
+screen_height: f32 = 512
 
 main :: proc() {
 	full_title := strings.concatenate({PROGRAM_NAME, " ", PROGRAM_VERSION, "+", COMMIT_HASH})
@@ -43,7 +55,7 @@ main :: proc() {
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 
 
-	window := glfw.CreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, c_title, nil, nil)
+	window := glfw.CreateWindow(i32(screen_width), i32(screen_height), c_title, nil, nil)
 	defer glfw.DestroyWindow(window)
 
 	if window == nil {
@@ -55,8 +67,8 @@ main :: proc() {
 	glfw.SwapInterval(1)
 
 	glfw.SetKeyCallback(window, key_callback)
-
 	glfw.SetCharCallback(window, character_callback)
+	glfw.SetScrollCallback(window, scroll_callback)
 
 	glfw.SetFramebufferSizeCallback(window, size_callback)
 	gl.load_up_to(int(GL_MAJOR_VERSION), GL_MINOR_VERSION, glfw.gl_set_proc_address)
@@ -84,11 +96,10 @@ main :: proc() {
 
 	code_point_of_first_char: i32 = 32
 	chars_to_include_in_font_atlas: i32 = 95
-	font_size: f32 = 64.0
+	font_size: f32 = 14.0
 
-	chars_baked := make([]truetype.bakedchar, chars_to_include_in_font_atlas)
-	packed_chars := make([]truetype.packedchar, chars_to_include_in_font_atlas)
-	aligned_quads := make([]truetype.aligned_quad, chars_to_include_in_font_atlas)
+	packed_chars = make([]truetype.packedchar, chars_to_include_in_font_atlas)
+	aligned_quads = make([]truetype.aligned_quad, chars_to_include_in_font_atlas)
 
 
 	font_context: truetype.pack_context
@@ -161,17 +172,13 @@ main :: proc() {
 		return
 	}
 
-	// Build a mesh for some text
 	vertices: [dynamic]Vertex = build_text_mesh(
 		"Hello World",
 		aligned_quads,
 		packed_chars,
-		SCREEN_WIDTH,
-		SCREEN_HEIGHT,
+		f32(screen_width),
+		f32(screen_height),
 	)
-
-	vao: u32
-	vbo: u32
 
 	gl.GenVertexArrays(1, &vao)
 	gl.GenBuffers(1, &vbo)
@@ -197,7 +204,32 @@ main :: proc() {
 	for (!glfw.WindowShouldClose(window) && running) {
 		glfw.PollEvents()
 
-		update()
+		if mesh_dirty {
+			text_str := utf8.runes_to_string(text_buffer[:], context.allocator)
+			defer delete(text_str)
+
+			delete(vertices)
+			vertices = build_text_mesh(
+				text_str,
+				aligned_quads,
+				packed_chars,
+				screen_width,
+				screen_height,
+			)
+			vertex_count = i32(len(vertices))
+
+			gl.BindVertexArray(vao)
+			gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
+			gl.BufferData(
+				gl.ARRAY_BUFFER,
+				len(vertices) * size_of(Vertex),
+				raw_data(vertices),
+				gl.DYNAMIC_DRAW,
+			)
+			gl.BindVertexArray(0)
+
+			mesh_dirty = false
+		}
 
 		draw(shader_program, vao, i32(len(vertices)), font_atlas_texture_id)
 		glfw.SwapBuffers(window)
@@ -305,10 +337,6 @@ build_text_mesh :: proc(
 	return vertices
 }
 
-update :: proc() {
-
-}
-
 draw :: proc(shader_program: u32, vao: u32, vertex_count: i32, texture_id: u32) {
 	gl.ClearColor(0.2, 0.3, 0.3, 1.0)
 	gl.Clear(gl.COLOR_BUFFER_BIT)
@@ -324,11 +352,29 @@ exit :: proc() {
 }
 
 key_callback :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods: i32) {
-	if key == glfw.KEY_ESCAPE {running = false}
+	context = runtime.default_context()
+	if key == glfw.KEY_ESCAPE {
+		running = false
+	}
+	if key == glfw.KEY_BACKSPACE && action != glfw.RELEASE {
+		if len(text_buffer) > 0 do pop(&text_buffer)
+		mesh_dirty = true
+	}
 }
 
-character_callback :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {}
+scroll_callback :: proc "c" (window: glfw.WindowHandle, offset_x: f64, offset_y: f64) {
 
-size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
+}
+
+character_callback :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
+	context = runtime.default_context()
+	append(&text_buffer, codepoint)
+	mesh_dirty = true
+}
+
+size_callback :: proc "c" (window: glfw.WindowHandle, width: i32, height: i32) {
 	gl.Viewport(0, 0, width, height)
+	screen_width = f32(width)
+	screen_height = f32(height)
+	mesh_dirty = true
 }
