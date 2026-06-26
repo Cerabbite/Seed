@@ -41,7 +41,6 @@ main :: proc() {
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, GL_MAJOR_VERSION)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, GL_MINOR_VERSION)
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-	glfw.WindowHint(glfw.DECORATED, glfw.FALSE)
 
 
 	window := glfw.CreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, c_title, nil, nil)
