@@ -23,13 +23,17 @@ main :: proc() {
 	full_title := strings.concatenate({PROGRAM_NAME, " ", PROGRAM_VERSION, "+", COMMIT_HASH})
 	c_title := strings.clone_to_cstring(full_title)
 
-	glfw.WindowHint(glfw.RESIZABLE, 1)
+	if glfw.Init() != true {
+		return
+	}
+	defer glfw.Terminate()
+
+	glfw.WindowHint(glfw.RESIZABLE, 0)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, GL_MAJOR_VERSION)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, GL_MINOR_VERSION)
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+	glfw.WindowHint(glfw.DECORATED, glfw.FALSE)
 
-	if glfw.Init() != true {return}
-	defer glfw.Terminate()
 
 	window := glfw.CreateWindow(512, 512, c_title, nil, nil)
 	defer glfw.DestroyWindow(window)
