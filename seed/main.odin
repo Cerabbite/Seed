@@ -241,28 +241,14 @@ init :: proc() {
 }
 
 init_shaders :: proc() -> (program: u32, ok: bool) {
-	vertex_shader_src, vertex_shader_error := os.read_entire_file(
-		"seed/blit.vert",
-		context.allocator,
-	)
-	fragment_shader_src, fragment_shader_error := os.read_entire_file(
-		"seed/blit.frag",
-		context.allocator,
-	)
-	defer delete(vertex_shader_src)
-	defer delete(fragment_shader_src)
-	if vertex_shader_error != 0 || fragment_shader_error != 0 {
-		fmt.eprintln("Failed to read shader files")
-		return 0, false
-	}
 
 	vertex_shader := gl.CreateShader(gl.VERTEX_SHADER)
-	vertex_shader_cstr := cstring(&vertex_shader_src[0])
+	vertex_shader_cstr := #load("blit.vert", cstring)
 	gl.ShaderSource(vertex_shader, 1, &vertex_shader_cstr, nil)
 	gl.CompileShader(vertex_shader)
 
 	fragment_shader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	fragment_shader_cstr := cstring(&fragment_shader_src[0])
+	fragment_shader_cstr := #load("blit.frag", cstring)
 	gl.ShaderSource(fragment_shader, 1, &fragment_shader_cstr, nil)
 	gl.CompileShader(fragment_shader)
 
