@@ -3,8 +3,9 @@ package main
 import "core:c"
 import "core:c/libc"
 import "core:strings"
+import "glfw"
 import gl "vendor:OpenGL"
-import "vendor:glfw"
+// import "vendor:stb/truetype"
 
 PROGRAM_NAME :: "Seed"
 PROGRAM_VERSION :: "0.1.0"
@@ -16,7 +17,9 @@ COMMIT_HASH :: #config(COMMIT_HASH, "dev")
 
 running: b32 = true
 
+
 main :: proc() {
+	// truetype.GetBakedQuad
 	full_title := strings.concatenate({PROGRAM_NAME, " ", PROGRAM_VERSION, "+", COMMIT_HASH})
 	c_title := strings.clone_to_cstring(full_title)
 	glfw.WindowHint(glfw.RESIZABLE, 1)
@@ -59,7 +62,6 @@ main :: proc() {
 
 		glfw.SwapBuffers(window)
 	}
-
 	exit()
 }
 
