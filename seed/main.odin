@@ -2,11 +2,11 @@ package main
 
 import "core:c"
 import "core:fmt"
+import "core:math/linalg"
 import "core:os"
 import "core:strings"
 import "glfw"
 import gl "vendor:OpenGL"
-import "vendor:stb/image"
 import "vendor:stb/truetype"
 
 PROGRAM_NAME :: "Seed"
@@ -17,7 +17,16 @@ GL_MINOR_VERSION :: 6
 
 COMMIT_HASH :: #config(COMMIT_HASH, "dev")
 
+SCREEN_WIDTH :: 512
+SCREEN_HEIGHT :: 512
+
 running: b32 = true
+
+Vertex :: struct {
+	Position:          linalg.Vector3f32,
+	Color:             linalg.Vector4f32,
+	TextureCoordinate: linalg.Vector2f32,
+}
 
 main :: proc() {
 	full_title := strings.concatenate({PROGRAM_NAME, " ", PROGRAM_VERSION, "+", COMMIT_HASH})
@@ -28,14 +37,14 @@ main :: proc() {
 	}
 	defer glfw.Terminate()
 
-	glfw.WindowHint(glfw.RESIZABLE, 0)
+	glfw.WindowHint(glfw.RESIZABLE, 1)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, GL_MAJOR_VERSION)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, GL_MINOR_VERSION)
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 	glfw.WindowHint(glfw.DECORATED, glfw.FALSE)
 
 
-	window := glfw.CreateWindow(512, 512, c_title, nil, nil)
+	window := glfw.CreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, c_title, nil, nil)
 	defer glfw.DestroyWindow(window)
 
 	if window == nil {
@@ -58,18 +67,21 @@ main :: proc() {
 
 	init()
 
-	font_data, err := os.read_entire_file(
+	font_data, error := os.read_entire_file(
 		"/usr/share/fonts/truetype/ubuntu/UbuntuMono[wght].ttf",
 		context.allocator,
 	)
-	if err != 0 {
-		fmt.eprintf("Failed to read file: %v\n", err)
+	defer delete(font_data)
+
+	if error != 0 {
+		fmt.eprintf("Failed to read file: %v\n", error)
 		return
 	}
 
 	font_atlas_width: i32 = 512
 	font_atlas_height: i32 = 512
-	font_atlast_bitmap := make([]byte, font_atlas_width * font_atlas_height)
+	font_atlas_bitmap := make([]byte, font_atlas_width * font_atlas_height)
+	defer delete(font_atlas_bitmap)
 
 	code_point_of_first_char: i32 = 32
 	chars_to_include_in_font_atlas: i32 = 95
@@ -79,11 +91,12 @@ main :: proc() {
 	packed_chars := make([]truetype.packedchar, chars_to_include_in_font_atlas)
 	aligned_quads := make([]truetype.aligned_quad, chars_to_include_in_font_atlas)
 
+
 	font_context: truetype.pack_context
 
 	truetype.PackBegin(
 		&font_context,
-		&font_atlast_bitmap[0],
+		&font_atlas_bitmap[0],
 		font_atlas_width,
 		font_atlas_height,
 		0,
@@ -119,39 +132,197 @@ main :: proc() {
 		)
 	}
 
-	image.write_png(
-		"font_atlas.png",
+	font_atlas_texture_id: u32
+	gl.GenTextures(1, &font_atlas_texture_id)
+	gl.BindTexture(gl.TEXTURE_2D, font_atlas_texture_id)
+
+	gl.TexImage2D(
+		gl.TEXTURE_2D,
+		0,
+		gl.R8,
 		font_atlas_width,
 		font_atlas_height,
-		1,
-		&font_atlast_bitmap[0],
-		font_atlas_width,
+		0,
+		gl.RED,
+		gl.UNSIGNED_BYTE,
+		&font_atlas_bitmap[0],
 	)
+
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
+
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+
+	shader_program, shader_ok := init_shaders()
+	if !shader_ok {
+		fmt.eprintln("Failed to create shader program")
+		return
+	}
+
+	// Build a mesh for some text
+	vertices: [dynamic]Vertex = build_text_mesh(
+		"Hello World",
+		aligned_quads,
+		packed_chars,
+		SCREEN_WIDTH,
+		SCREEN_HEIGHT,
+	)
+
+	vao: u32
+	vbo: u32
+
+	gl.GenVertexArrays(1, &vao)
+	gl.GenBuffers(1, &vbo)
+
+	gl.BindVertexArray(vao)
+	gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices) * size_of(Vertex), &vertices[0], gl.STATIC_DRAW)
+
+	// Tell GL the layout of your Vertex struct
+	// Position  — offset 0,  3 floats
+	// Color     — offset 12, 4 floats
+	// TexCoord  — offset 28, 2 floats
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointer(0, 3, gl.FLOAT, false, size_of(Vertex), 0)
+	gl.EnableVertexAttribArray(1)
+	gl.VertexAttribPointer(1, 4, gl.FLOAT, false, size_of(Vertex), 12)
+	gl.EnableVertexAttribArray(2)
+	gl.VertexAttribPointer(2, 2, gl.FLOAT, false, size_of(Vertex), 28)
+
+	gl.BindVertexArray(0)
+
 
 	for (!glfw.WindowShouldClose(window) && running) {
 		glfw.PollEvents()
 
 		update()
 
-		draw()
+		draw(shader_program, vao, i32(len(vertices)), font_atlas_texture_id)
 		glfw.SwapBuffers(window)
 	}
 	exit()
 }
 
-init :: proc() {init_shaders()}
-
-init_shaders :: proc() {
+init :: proc() {
 }
 
-update :: proc() {}
+init_shaders :: proc() -> (program: u32, ok: bool) {
+	vertex_shader_src, vertex_shader_error := os.read_entire_file(
+		"seed/blit.vert",
+		context.allocator,
+	)
+	fragment_shader_src, fragment_shader_error := os.read_entire_file(
+		"seed/blit.frag",
+		context.allocator,
+	)
+	defer delete(vertex_shader_src)
+	defer delete(fragment_shader_src)
+	if vertex_shader_error != 0 || fragment_shader_error != 0 {
+		fmt.eprintln("Failed to read shader files")
+		return 0, false
+	}
 
-draw :: proc() {
+	vertex_shader := gl.CreateShader(gl.VERTEX_SHADER)
+	vertex_shader_cstr := cstring(&vertex_shader_src[0])
+	gl.ShaderSource(vertex_shader, 1, &vertex_shader_cstr, nil)
+	gl.CompileShader(vertex_shader)
+
+	fragment_shader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	fragment_shader_cstr := cstring(&fragment_shader_src[0])
+	gl.ShaderSource(fragment_shader, 1, &fragment_shader_cstr, nil)
+	gl.CompileShader(fragment_shader)
+
+	program = gl.CreateProgram()
+	gl.AttachShader(program, vertex_shader)
+	gl.AttachShader(program, fragment_shader)
+	gl.LinkProgram(program)
+	gl.DeleteShader(vertex_shader)
+	gl.DeleteShader(fragment_shader)
+
+	return program, true
+
+}
+
+build_text_mesh :: proc(
+	text: string,
+	aligned_quads: []truetype.aligned_quad,
+	packed_chars: []truetype.packedchar,
+	screen_w: f32,
+	screen_h: f32,
+) -> [dynamic]Vertex {
+	vertices: [dynamic]Vertex
+
+	// Cursor position in pixels, starting top-left-ish
+	x: f32 = 50
+	y: f32 = screen_h / 2
+
+	for char in text {
+		idx := int(char) - 32
+		if idx < 0 || idx >= len(aligned_quads) {
+			continue
+		}
+
+		q := aligned_quads[idx]
+
+		x0 := (q.x0 + x) / screen_w * 2 - 1
+		x1 := (q.x1 + x) / screen_w * 2 - 1
+		y0 := 1 - (q.y0 + y) / screen_h * 2
+		y1 := 1 - (q.y1 + y) / screen_h * 2
+
+		x += packed_chars[idx].xadvance
+
+		color := linalg.Vector4f32{1, 1, 1, 1}
+
+		// Two triangles (6 vertices) per glyph
+		append(
+			&vertices,
+			Vertex{Position = {x0, y0, 0}, Color = color, TextureCoordinate = {q.s0, q.t0}},
+		)
+		append(
+			&vertices,
+			Vertex{Position = {x1, y0, 0}, Color = color, TextureCoordinate = {q.s1, q.t0}},
+		)
+		append(
+			&vertices,
+			Vertex{Position = {x1, y1, 0}, Color = color, TextureCoordinate = {q.s1, q.t1}},
+		)
+		append(
+			&vertices,
+			Vertex{Position = {x0, y0, 0}, Color = color, TextureCoordinate = {q.s0, q.t0}},
+		)
+		append(
+			&vertices,
+			Vertex{Position = {x1, y1, 0}, Color = color, TextureCoordinate = {q.s1, q.t1}},
+		)
+		append(
+			&vertices,
+			Vertex{Position = {x0, y1, 0}, Color = color, TextureCoordinate = {q.s0, q.t1}},
+		)
+	}
+
+	return vertices
+}
+
+update :: proc() {
+
+}
+
+draw :: proc(shader_program: u32, vao: u32, vertex_count: i32, texture_id: u32) {
 	gl.ClearColor(0.2, 0.3, 0.3, 1.0)
 	gl.Clear(gl.COLOR_BUFFER_BIT)
-}
 
-exit :: proc() {}
+	gl.UseProgram(shader_program)
+	gl.BindTexture(gl.TEXTURE_2D, texture_id)
+	gl.BindVertexArray(vao)
+	gl.DrawArrays(gl.TRIANGLES, 0, vertex_count)
+	gl.BindVertexArray(0)
+}
+exit :: proc() {
+
+}
 
 key_callback :: proc "c" (window: glfw.WindowHandle, key, scancode, action, mods: i32) {
 	if key == glfw.KEY_ESCAPE {running = false}
